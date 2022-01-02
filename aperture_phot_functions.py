@@ -15,17 +15,13 @@ fc_K2V_W1 = 1.0038
 fc_K2V_W2 = 1.0512
 fc_K2V_W3 = 1.0030
 fc_K2V_W4 = 1.0013
-fc_beta200_W1 = 2.0577
-fc_beta200_W2 = 1.3448
-fc_beta200_W3 = 1.0006
-fc_beta200_W4 = .9833
 W1_ZMFD = 306.682
 W2_ZMFD = 170.663
 W3_ZMFD = 29.045
 W4_ZMFD = 8.284
 
 
-# TODO for whole script: Condense aperture_phot functions into one; the only difference are the last few lines.
+# TODO for whole script: This version does not have image splicing functionality
 
 # FOLLOWING: Static functions
 
@@ -47,15 +43,6 @@ def correction_type(band, fc):
             return fc_K2V_W3, W3_ZMFD
         elif band == 'W4':
             return fc_K2V_W4, W4_ZMFD
-    elif fc == 'beta200':
-        if band == 'W1':
-            return fc_beta200_W1, W1_ZMFD
-        elif band == 'W2':
-            return fc_beta200_W2, W2_ZMFD
-        elif band == 'W3':
-            return fc_beta200_W3, W3_ZMFD
-        elif band == 'W4':
-            return fc_beta200_W4, W4_ZMFD
 
 
 def list_rms(in_list):
@@ -65,6 +52,22 @@ def list_rms(in_list):
     rms /= len(in_list)
     rms = np.sqrt(rms)
     return rms
+
+
+# Converts flux from integrated image values to Jy/px, depending on the telescope (and, thus, the input unit)
+def flux_conversion(inp_flux, band, header):
+    fc = 'K2V'  # Color correction for WISE
+
+    if "ALMA" in band:
+        return inp_flux * (np.pi / 4*np.log(2)) * (header['CDELT2']/header['BMAJ']) * \
+        (header['CDELT2']/header['BMIN'])
+    elif ("Wide" in band) or ("N" in band):
+        return ((inp_flux * 1000000) / (4.25 * (10 ** 10))) * ((header['CD2_2'] * 3600) ** 2)
+    elif "W" in band:  # FIXME: This assumes one file
+        return mag_to_jy(to_mag(header['MAGZP'], inp_flux), correction_type(band, fc)[1], correction_type(band, fc)[0])
+    elif ("IRAC" in band) or ("MIPS" in band):
+        return ((inp_flux * 1000000) / (4.25 * (10 ** 10))) * (header['PXSCAL2'] ** 2)
+
 
 # FOLLOWING: File read functions and auxiliaries
 
@@ -165,41 +168,26 @@ def aperture_phot_manual(image_data, aperture_data, background_center=(0, 0)):
     return total_flux
 
 
-def aperture_rms(aperture_data):
-    flat_list = []
-    for i in range(len(aperture_data)):
-        for j in range(len(aperture_data[0])):
-            flat_list.append(aperture_data[i][j])
-    i = 0
-    while i < len(flat_list):
-        if flat_list[i] == 0:
-            flat_list.pop(i)
-            i -= 1
-        i += 1
-
-    return list_rms(flat_list)
-
-# FOLLOWING: Telescope specific aperture photometry functions
-
-# This function takes a WISE science file, a WISE unc file, a ds9 aperture file, coordinates for background subtraction,
-# and the band (i.e. W1).  It performs aperture photometry on this.
-def aperture_phot_WISE(file_name, err_file_name, aperture_file_name, background_x, background_y, band):
-    # Open a fits file
+# This function takes some image, defines the aperture, and [uses other functions to] integrate the flux over the
+# aperture.  It returns the flux density over some aperture, as well as the statistical uncertainty gained from the
+# 'calc_error' function below.  NOTE: This does not use the unc file to calculate statistical uncertainty.
+def image_aperture_phot(file_name, aperture_file_name, background_x, background_y, band):
+    # Open .fits file
+    print(file_name)
     cur_file = fits.open(file_name)
-    err_file = fits.open(err_file_name)
 
     # Define some things
-    fc = "K2V"
     main_x, main_y, main_major, main_minor, main_tilt = aperture_file_read(aperture_file_name, 0)
     sub_aps = []
     for i in range(1, aperture_count(aperture_file_name)):
         sub_aps.append(aperture_file_read(aperture_file_name, i))
     data = cur_file[0].data
-    err_data = err_file[0].data
-    magzp = cur_file[0].header['MAGZP']
-    main_tilt = main_tilt - 90 + cur_file[0].header['CROTA2']
+    if "ALMA" in band:  # The data is 'thicker' with ALMA
+        data = cur_file[0].data[0][0]
     background_center = (background_x, background_y)
     main_center = (main_x, main_y)
+    if ("W" in band) and ("Wide" not in band):  # The rotation is weird for WISE apertures
+        main_tilt = main_tilt - 90 + cur_file[0].header['CROTA2']
 
     # Get total flux for subtraction apertures
     sub_total = 0
@@ -215,160 +203,6 @@ def aperture_phot_WISE(file_name, err_file_name, aperture_file_name, background_
         else:  # On the off chance the flux value is negative
             pass
 
-    # Define aperture, create masks, and pass to manual aperture photometry function
-    coord = SkyCoord(main_center[0], main_center[1], frame='icrs', unit='deg')
-    ap = SkyEllipticalAperture(coord, main_major*u.deg, main_minor*u.deg, theta=main_tilt*u.deg)
-    ap = ap.to_pixel(WCS(cur_file[0].header))
-    ap_mask = ap.to_mask(method='center')
-    ap_mask = ap_mask.multiply(data)
-
-    if aperture_phot_manual(data, ap_mask, background_center) > 0:
-        total_flux = aperture_phot_manual(data, ap_mask, background_center)
-    else:  # On the off chance the flux value is negative
-        return 0.0, 0.0
-    total_flux -= sub_total
-
-    # Create error mask
-    error_mask = ap.to_mask(method='center')
-    error_mask = error_mask.multiply(err_data)
-
-    # Close file
-    cur_file.close()
-    err_file.close()
-
-    # Convert units and return total flux in Jy
-    return mag_to_jy(to_mag(magzp, total_flux), correction_type(band, fc)[1], correction_type(band, fc)[0]), \
-        mag_to_jy(to_mag(magzp, unc_error(error_mask)), correction_type(band, fc)[1], correction_type(band, fc)[0])
-
-
-# See comment for aperture_phot_WISE function.  The only difference is that there is no color correction because the
-# units are already in MJy/sr.
-def aperture_phot_Spitzer(file_name, err_file_name, aperture_file_name, background_x, background_y):
-    # Open a fits file
-    cur_file = fits.open(file_name)
-    err_file = fits.open(err_file_name)
-
-    # Define some things
-    main_x, main_y, main_major, main_minor, main_tilt = aperture_file_read(aperture_file_name, 0)
-    sub_aps = []
-    for i in range(1, aperture_count(aperture_file_name)):
-        sub_aps.append(aperture_file_read(aperture_file_name, i))
-    data = cur_file[0].data
-    err_data = err_file[0].data
-    background_center = (background_x, background_y)
-    main_center = (main_x, main_y)
-
-    # Get total flux for subtraction apertures
-    sub_total = 0
-    for i in range(len(sub_aps)):
-        sub_x, sub_y, sub_major, sub_minor, sub_tilt = sub_aps[i]
-        sub_coord = SkyCoord(sub_x, sub_y, frame='icrs', unit='deg')
-        sub_ap = SkyEllipticalAperture(sub_coord, sub_major*u.deg, sub_minor*u.deg, theta=sub_tilt*u.deg)
-        sub_ap = sub_ap.to_pixel(WCS(cur_file[0].header))
-        sub_ap_mask = sub_ap.to_mask(method='center')
-        sub_ap_mask = sub_ap_mask.multiply(data)
-        sub_total += aperture_phot_manual(data, sub_ap_mask, background_center)
-
-    # Define aperture, create masks, and pass to manual aperture photometry function
-    coord = SkyCoord(main_center[0], main_center[1], frame='icrs', unit='deg')
-    ap = SkyEllipticalAperture(coord, main_major*u.deg, main_minor*u.deg, theta=main_tilt*u.deg)
-    ap = ap.to_pixel(WCS(cur_file[0].header))
-    ap_mask = ap.to_mask(method='center')
-    ap_mask = ap_mask.multiply(data)
-
-    total_flux = aperture_phot_manual(data, ap_mask, background_center)
-    total_flux -= sub_total
-
-    # Create error mask
-    error_mask = ap.to_mask(method='center')
-    error_mask = error_mask.multiply(err_data)
-
-    # Close file
-    cur_file.close()
-    err_file.close()
-
-    # Convert units and return total flux in Jy
-    return ((total_flux * 1000000) / (4.25 * (10 ** 10))) * (cur_file[0].header['PXSCAL2'] ** 2), \
-           ((unc_error(error_mask) * 1000000) / (4.25 * (10 ** 10))) * (cur_file[0].header['PXSCAL2'] ** 2)
-
-
-# This is basically the aperture_phot_Spitzer function, but the pixel scale retrieval is different,
-# and the WCS is different.
-def aperture_phot_Akari(file_name, err_file_name, aperture_file_name, background_x, background_y):
-    # Open a fits file
-    cur_file = fits.open(file_name)
-    err_file = fits.open(err_file_name)
-
-    # Define some things
-    main_x, main_y, main_major, main_minor, main_tilt = aperture_file_read(aperture_file_name, 0)
-    sub_aps = []
-    for i in range(1, aperture_count(aperture_file_name)):
-        sub_aps.append(aperture_file_read(aperture_file_name, i))
-    data = cur_file[0].data
-    err_data = err_file[0].data
-    background_center = (background_x, background_y)
-    main_center = (main_x, main_y)
-
-    # Get total flux for subtraction apertures
-    sub_total = 0
-    for i in range(len(sub_aps)):
-        sub_x, sub_y, sub_major, sub_minor, sub_tilt = sub_aps[i]
-        sub_coord = SkyCoord(sub_x, sub_y, frame='icrs', unit='deg')
-        sub_ap = SkyEllipticalAperture(sub_coord, sub_major*u.deg, sub_minor*u.deg, theta=sub_tilt*u.deg)
-        sub_ap = sub_ap.to_pixel(WCS(cur_file[0].header))
-        sub_ap_mask = sub_ap.to_mask(method='center')
-        sub_ap_mask = sub_ap_mask.multiply(data)
-        sub_total += aperture_phot_manual(data, sub_ap_mask, background_center)
-
-    # Define aperture, create masks, and pass to manual aperture photometry function
-    coord = SkyCoord(main_center[0], main_center[1], frame='icrs', unit='deg')
-    ap = SkyEllipticalAperture(coord, main_major*u.deg, main_minor*u.deg, theta=main_tilt*u.deg)
-    ap = ap.to_pixel(WCS(cur_file[0].header))
-    ap_mask = ap.to_mask(method='center')
-    ap_mask = ap_mask.multiply(data)
-
-    total_flux = aperture_phot_manual(data, ap_mask)
-    total_flux -= sub_total
-
-    # Create error mask
-    error_mask = ap.to_mask(method='center')
-    error_mask = error_mask.multiply(err_data)
-
-    # Close file
-    cur_file.close()
-    err_file.close()
-
-    # Convert units and return total flux in Jy
-    return ((total_flux * 1000000) / (4.25 * (10 ** 10))) * ((cur_file[0].header['CD2_2']*3600) ** 2), \
-           ((unc_error(error_mask) * 1000000) / (4.25 * (10 ** 10))) * ((cur_file[0].header['CD2_2']*3600) ** 2)
-
-
-# See comment for aperture_phot_WISE function.  The only difference is that there is no color correction because the
-# units are already in Jy/beam.
-def aperture_phot_ALMA(file_name, err_file_name, aperture_file_name, background_x, background_y):
-    # Open a fits file
-    cur_file = fits.open(file_name)
-
-    # Define some things
-    main_x, main_y, main_major, main_minor, main_tilt = aperture_file_read(aperture_file_name, 0)
-    sub_aps = []
-    for i in range(1, aperture_count(aperture_file_name)):
-        sub_aps.append(aperture_file_read(aperture_file_name, i))
-    data = cur_file[0].data[0][0]
-    background_center = (background_x, background_y)
-    main_center = (main_x, main_y)
-
-    # Get total flux for subtraction apertures
-    sub_total = 0
-    for i in range(len(sub_aps)):
-        sub_x, sub_y, sub_major, sub_minor, sub_tilt = sub_aps[i]
-        sub_coord = SkyCoord(sub_x, sub_y, frame='icrs', unit='deg')
-        sub_ap = SkyEllipticalAperture(sub_coord, sub_major*u.deg, sub_minor*u.deg, theta=sub_tilt*u.deg)
-        sub_ap = sub_ap.to_pixel(WCS(cur_file[0].header))
-        sub_ap_mask = sub_ap.to_mask(method='center')
-        sub_ap_mask = sub_ap_mask.multiply(data)
-        sub_total += aperture_phot_manual(data, sub_ap_mask, background_center)
-
     cur_wcs = WCS(cur_file[0].header, naxis=[1, 2])
     # Define aperture, create masks, and pass to manual aperture photometry function
     coord = SkyCoord(main_center[0], main_center[1], frame='icrs', unit='deg')
@@ -377,26 +211,47 @@ def aperture_phot_ALMA(file_name, err_file_name, aperture_file_name, background_
     ap_mask = ap.to_mask(method='center')
     ap_mask = ap_mask.multiply(data)
 
-    total_flux = aperture_phot_manual(data, ap_mask, background_center)
+    # Pass mask to aperture_phot_manual function to integrate flux over aperture
+    if aperture_phot_manual(data, ap_mask, background_center) > 0:
+        total_flux = aperture_phot_manual(data, ap_mask, background_center)
+    else:  # On the off chance the flux value is negative
+        return 0.0, 0.0
     total_flux -= sub_total
 
-    # If this function is to evaluate the noise in the aperture, do that
+    # If this function is to evaluate the noise in the aperture, do that instead, overwriting the previous block
     if "Noise" in file_name:
         total_flux = 4*aperture_rms(ap_mask)*len(np.array(ap_mask).ravel())
 
-    # Calculate error
-    error = calc_error(ap, data)
-    error_jy = error * (np.pi / 4*np.log(2)) * (cur_file[0].header['CDELT2']/cur_file[0].header['BMAJ']) * \
-        (cur_file[0].header['CDELT2']/cur_file[0].header['BMIN'])
-
-    # Close file
+    # Close .fits file
     cur_file.close()
 
-    # Convert units and return total flux in Jy
-    total_flux_jy = total_flux * (np.pi / 4*np.log(2)) * (cur_file[0].header['CDELT2']/cur_file[0].header['BMAJ']) * \
-        (cur_file[0].header['CDELT2']/cur_file[0].header['BMIN'])
-    return total_flux_jy, error_jy
+    # Calculate error (does not yet work for Spitzer bands, so just return)
+    try:
+        error = calc_error(ap, data)
+    except:
+        return flux_conversion(total_flux, band, cur_file[0].header), 0
 
+    # Convert units and return flux, error
+    return flux_conversion(total_flux, band, cur_file[0].header), flux_conversion(error, band, cur_file[0].header)
+
+
+def aperture_rms(aperture_data):
+    flat_list = []
+    for i in range(len(aperture_data)):
+        for j in range(len(aperture_data[0])):
+            flat_list.append(aperture_data[i][j])
+    i = 0
+    while i < len(flat_list):
+        if flat_list[i] == 0:
+            flat_list.pop(i)
+            i -= 1
+        i += 1
+
+    return list_rms(flat_list)
+
+
+# FOLLOWING: Image splicing functions for WISE.  These aren't currently called by anything, but rather they're here for
+# FOLLOWING: archival purposes, in case they need to be used in the future.
 
 # An aperture photometry function (for WISE images) for when the target is spread over two images vertically.
 # Takes an upper and a lower fits file, the coordinates for background subtraction for both files (in pixel), and the
@@ -552,6 +407,7 @@ def unc_error(aperture_data):
 
 # TODO: Make 'factor' automatically detect.  It should be 1 unless the major axis of the aperture is more than half the
 # TODO: image size
+# FIXME: This doesn't work for Spitzer images
 # This function takes the main aperture, copies it 20 random times around the image that don't overlap with the main
 # aperture, and returns the standard deviation of the flux through these
 def calc_error(main_ap, image_data):
@@ -582,6 +438,7 @@ def calc_error(main_ap, image_data):
         temp_ap_mask = temp_ap_mask.multiply(image_data)
         flux_values.append(aperture_phot_manual(image_data, temp_ap_mask, new_center))
 
+    # If for some reason there are nan values in the list, get rid of them
     i = 0
     while i < len(flux_values):
         if flux_values[i] != flux_values[i]:

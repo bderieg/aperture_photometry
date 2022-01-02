@@ -73,53 +73,9 @@ def update_spreadsheet(start=start_index, end=end_index):
         unc_name_2 = get_parameters(i)[9]
         two_files = get_parameters(i)[10]
 
-        if "ALMA" in band:
-            sheet[flux_col + str(i)] = round(apf.aperture_phot_ALMA(sci_name, unc_name, ap_name, background_x,
-                                                                    background_y)[0], 4)
-        elif("Wide" in band) or ("N" in band):
-            sheet[flux_col + str(i)] = round(apf.aperture_phot_Akari(sci_name, unc_name, ap_name, background_x,
-                                                                     background_y)[0], 4)
-        elif "W" in band:
-            if two_files == 'V':
-                sheet[flux_col + str(i)] = round(apf.splice_WISE_vertical(sci_name, sci_name_2, ap_name, background_x,
-                                                                          background_y, background_x_2, background_y_2,
-                                                                          band), 4)
-            elif two_files == 'H':
-                sheet[flux_col + str(i)] = round(apf.splice_WISE_horizontal(sci_name, sci_name_2, ap_name, background_x,
-                                                                          background_y, background_x_2, background_y_2,
-                                                                          band), 4)
-            else:
-                sheet[flux_col + str(i)] = round(apf.aperture_phot_WISE(sci_name, unc_name, ap_name, background_x,
-                                                                        background_y, band)[0], 4)
-        elif "IRAC" or "MIPS" in band:
-            sheet[flux_col + str(i)] = round(apf.aperture_phot_Spitzer(sci_name, unc_name, ap_name, background_x,
-                                                                       background_y)[0], 4)
+        update_values = apf.image_aperture_phot(sci_name, ap_name, background_x, background_y, band)
 
-    # Update error value column
-    for i in range(start, end):
-        sci_name = get_parameters(i)[0]
-        unc_name = get_parameters(i)[1]
-        ap_name = get_parameters(i)[2]
-        background_x = get_parameters(i)[3]
-        background_y = get_parameters(i)[4]
-        background_x_2 = get_parameters(i)[5]
-        background_y_2 = get_parameters(i)[6]
-        band = get_parameters(i)[7]
-        sci_name_2 = get_parameters(i)[8]
-        unc_name_2 = get_parameters(i)[9]
-        two_files = get_parameters(i)[10]
-
-        if "ALMA" in band:
-            sheet[err_col + str(i)] = apf.aperture_phot_ALMA(sci_name, unc_name, ap_name, background_x,
-                                                             background_y)[1]
-        elif ("Wide" in band) or ("N" in band):
-            sheet[err_col + str(i)] = apf.aperture_phot_Akari(sci_name, unc_name, ap_name, background_x,
-                                                              background_y)[1]
-        elif "W" in band:
-            sheet[err_col + str(i)] = apf.aperture_phot_WISE(sci_name, unc_name, ap_name, background_x,
-                                                             background_y, band)[1]
-        elif "IRAC" or "MIPS" in band:
-            sheet[err_col + str(i)] = apf.aperture_phot_Spitzer(sci_name, unc_name, ap_name, background_x,
-                                                                background_y)[1]
+        sheet[flux_col + str(i)] = round(update_values[0], 4)
+        sheet[err_col + str(i)] = round(update_values[1], 4)
 
     wb.save(spreadsheet_loc)
