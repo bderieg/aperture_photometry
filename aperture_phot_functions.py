@@ -215,17 +215,21 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
     if aperture_phot_manual(data, ap_mask, background_center) > 0:
         total_flux = aperture_phot_manual(data, ap_mask, background_center)
     else:  # On the off chance the flux value is negative
-        return 0.0, 0.0
+        total_flux = 0
     total_flux -= sub_total
 
     # If this function is to evaluate the noise in the aperture, do that instead, overwriting the previous block
+    # This takes 4 times the RMS noise in the aperture, then multiplies it by the beam size
     if "Noise" in file_name:
-        total_flux = 4*aperture_rms(ap_mask)*len(np.array(ap_mask).ravel())
+        total_flux = 4*aperture_rms(ap_mask) * (np.pi) * ((cur_file[0].header['BMAJ'])/(cur_file[0].header['CDELT2'])) \
+                     * ((cur_file[0].header['BMIN'])/(cur_file[0].header['CDELT2']))
+    print(total_flux)
 
     # Close .fits file
     cur_file.close()
 
     # Calculate error (does not yet work for Spitzer bands, so just return)
+    print(flux_conversion(total_flux, band, cur_file[0].header))
     try:
         error = calc_error(ap, data)
     except:

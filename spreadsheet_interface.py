@@ -2,7 +2,7 @@ import openpyxl as opxl
 import aperture_phot_functions as apf
 
 # Directory names
-main_path = "C:\\Users\\bderi\\Desktop\\Research Boizelle\\"
+main_path = "C:\\Users\\bderi\\Box\\School\\Research Boizelle\\"
 aperture_folder = "Saved Apertures\\"
 fits_folder = "FITS\\"
 spreadsheet_loc = main_path + "Flux Measurements.xlsx"
@@ -75,7 +75,7 @@ def update_spreadsheet(start=start_index, end=end_index):
 
         update_values = apf.image_aperture_phot(sci_name, ap_name, background_x, background_y, band)
 
-        sheet[flux_col + str(i)] = round(update_values[0], 4)
-        sheet[err_col + str(i)] = round(update_values[1], 4)
+        sheet[flux_col + str(i)] = round(update_values[0], 8)
+        sheet[err_col + str(i)] = round(update_values[1], 8)
 
     wb.save(spreadsheet_loc)
