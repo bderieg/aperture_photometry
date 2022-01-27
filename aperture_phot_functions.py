@@ -10,7 +10,7 @@ import spreadsheet_interface as spin
 import matplotlib.pyplot as plt
 
 # Constants
-background_width = 10
+background_width = 20
 fc_K2V_W1 = 1.0038
 fc_K2V_W2 = 1.0512
 fc_K2V_W3 = 1.0030
@@ -54,18 +54,24 @@ def list_rms(in_list):
     return rms
 
 
-# Converts flux from integrated image values to Jy/px, depending on the telescope (and, thus, the input unit)
+# Converts flux from integrated image values to Jy, depending on the telescope (and, thus, the input unit)
+# inp_flux: float, band: string, header: header type
 def flux_conversion(inp_flux, band, header):
-    fc = 'K2V'  # Color correction for WISE
+    fc = 'K2V'  # Color correction for WISE data
 
-    if "ALMA" in band:
+    if "ALMA" in band:  # Conversion from Jy/beam to Jy
+        #   Commented out: Trying to convert in a different way, using Astropy. Pretty sure it didn't work.
+        # omega_B = np.pi * (header['BMAJ']/3600) * (header['BMIN']/3600) / 3282.81 * u.sr
+        # test_flux_Mjypersr = inp_flux * (1*u.Jy/u.beam).to(u.MJy/u.sr, equivalencies=u.beam_angular_area(omega_B))
+        # test_flux = ((test_flux_Mjypersr * 1000000) / (4.25 * (10 ** 10))) * (header['CDELT2'] ** 2)
+        # print(test_flux)
         return inp_flux * (np.pi / 4*np.log(2)) * (header['CDELT2']/header['BMAJ']) * \
         (header['CDELT2']/header['BMIN'])
-    elif ("Wide" in band) or ("N" in band):
+    elif ("Wide" in band) or ("N" in band):  # Conversion from MJy/sr to Jy
         return ((inp_flux * 1000000) / (4.25 * (10 ** 10))) * ((header['CD2_2'] * 3600) ** 2)
-    elif "W" in band:  # FIXME: This assumes one file
+    elif "W" in band:  # Conversion from DN to Jy  FIXME: This assumes one file
         return mag_to_jy(to_mag(header['MAGZP'], inp_flux), correction_type(band, fc)[1], correction_type(band, fc)[0])
-    elif ("IRAC" in band) or ("MIPS" in band):
+    elif ("IRAC" in band) or ("MIPS" in band):  # Conversion from MJy/sr to Jy
         return ((inp_flux * 1000000) / (4.25 * (10 ** 10))) * (header['PXSCAL2'] ** 2)
 
 
@@ -86,6 +92,7 @@ def get_num(line, index):
 
 
 # Determines the number of elliptical apertures contained in an aperture file.
+# file_name: string
 def aperture_count(file_name):
     file = open(file_name)
     count = 1
@@ -100,6 +107,7 @@ def aperture_count(file_name):
 
 
 # Reads an elliptical aperture from an aperture file (file_name).  It reads the (n)th aperture from a file of multiple.
+# file_name: string, n: integer
 def aperture_file_read(file_name, n):
     # Open file and define variables
     file = open(file_name)
@@ -135,14 +143,16 @@ def aperture_file_read(file_name, n):
 
     return ra, dec, major_ax, minor_ax, tilt
 
-# FOLLOWING: Main aperture photometry function(s)
+# FOLLOWING: Main aperture photometry functions
 
 # This function takes an image_data array (the entire image), and aperture_data array (the aperture over which to
-# perform aperture photometry, and the pixel coordinates of the background center (tuple: x, y), and returns the total
-# flux through the aperture.
+# perform aperture photometry), and the pixel coordinates of the background center (tuple: x, y), and returns the total
+# flux through the aperture. It's pretty much the same as the Astropy.photutils.aperture.aperture_photometry function
 # WARNING: The aperture_data mask must have been made with method='center' or else negative flux values might result
+# image_data: 2D list, aperture_data: 2D list, background center: integer 2-tuple
 def aperture_phot_manual(image_data, aperture_data, background_center=(0, 0)):
-    # Find median background flux
+    # Find median background flux by taking a square centered at background_center with a side length of
+    # background_width, then integrating the flux value over this.
     background_aperture = RectangularAperture(background_center, background_width, background_width)
     mask = background_aperture.to_mask(method='center')
     mask_data = mask.multiply(image_data)
@@ -168,12 +178,17 @@ def aperture_phot_manual(image_data, aperture_data, background_center=(0, 0)):
     return total_flux
 
 
-# This function takes some image, defines the aperture, and [uses other functions to] integrate the flux over the
+# This function takes some image (file_name is the name of a .fits file), defines the aperture (aperture_file_name is
+# the name of a DS9 aperture file, which is just a text file), and [using other functions] integrates the flux over the
 # aperture.  It returns the flux density over some aperture, as well as the statistical uncertainty gained from the
-# 'calc_error' function below.  NOTE: This does not use the unc file to calculate statistical uncertainty.
+# 'calc_error' function below.
+#
+# background_x and background_y are integers corresponding to the center of the rectangular aperture used for background
+# subtraction
+#
+# band is a string so that the flux_conversion function knows how to convert based on the telescope
 def image_aperture_phot(file_name, aperture_file_name, background_x, background_y, band):
     # Open .fits file
-    print(file_name)
     cur_file = fits.open(file_name)
 
     # Define some things
@@ -189,7 +204,7 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
     if ("W" in band) and ("Wide" not in band):  # The rotation is weird for WISE apertures
         main_tilt = main_tilt - 90 + cur_file[0].header['CROTA2']
 
-    # Get total flux for subtraction apertures
+    # Get total flux for subtraction apertures (if using multiple apertures for point subtraction)
     sub_total = 0
     for i in range(len(sub_aps)):
         sub_x, sub_y, sub_major, sub_minor, sub_tilt = sub_aps[i]
@@ -204,12 +219,16 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
             pass
 
     cur_wcs = WCS(cur_file[0].header, naxis=[1, 2])
-    # Define aperture, create masks, and pass to manual aperture photometry function
+    # Define aperture and create masks which will be passed to aperture_phot_manual function
     coord = SkyCoord(main_center[0], main_center[1], frame='icrs', unit='deg')
     ap = SkyEllipticalAperture(coord, main_major*u.deg, main_minor*u.deg, theta=main_tilt*u.deg)
     ap = ap.to_pixel(cur_wcs)
     ap_mask = ap.to_mask(method='center')
     ap_mask = ap_mask.multiply(data)
+    # The commented code below will display ap_mask. It should be a 2D array cutout of the .fits file in the shape of
+    # the aperture
+    # plt.imshow(ap_mask)
+    # plt.show()
 
     # Pass mask to aperture_phot_manual function to integrate flux over aperture
     if aperture_phot_manual(data, ap_mask, background_center) > 0:
@@ -219,17 +238,14 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
     total_flux -= sub_total
 
     # If this function is to evaluate the noise in the aperture, do that instead, overwriting the previous block
-    # This takes 4 times the RMS noise in the aperture, then multiplies it by the beam size
+    # This takes 4.5 times the RMS noise in the aperture, then multiplies it by the beam size
     if "Noise" in file_name:
-        total_flux = 4*aperture_rms(ap_mask) * (np.pi) * ((cur_file[0].header['BMAJ'])/(cur_file[0].header['CDELT2'])) \
-                     * ((cur_file[0].header['BMIN'])/(cur_file[0].header['CDELT2']))
-    print(total_flux)
+        return 4.5*aperture_rms(ap_mask), 0
 
     # Close .fits file
     cur_file.close()
 
     # Calculate error (does not yet work for Spitzer bands, so just return)
-    print(flux_conversion(total_flux, band, cur_file[0].header))
     try:
         error = calc_error(ap, data)
     except:
@@ -391,23 +407,7 @@ def splice_WISE_horizontal(file_name_left, file_name_right, aperture_file_name, 
     return left_flux + right_flux
 
 
-# FOLLOWING: Error estimation functions
-
-def unc_error(aperture_data):
-    # Sum over aperture
-    total = 0
-    num_pix = 0
-    for i in range(len(aperture_data)):
-        for j in range(len(aperture_data[0])):
-            if aperture_data[i, j] > 0:
-                total += aperture_data[i, j]
-                num_pix += 1
-
-    # Find error from sum
-    mean = total / num_pix
-    error = mean * np.sqrt(num_pix)
-
-    return error
+# FOLLOWING: Error estimation function
 
 # TODO: Make 'factor' automatically detect.  It should be 1 unless the major axis of the aperture is more than half the
 # TODO: image size
