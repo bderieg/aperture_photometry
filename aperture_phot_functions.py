@@ -66,7 +66,7 @@ def flux_conversion(inp_flux, band, header):
         # test_flux = ((test_flux_Mjypersr * 1000000) / (4.25 * (10 ** 10))) * (header['CDELT2'] ** 2)
         # print(test_flux)
         return inp_flux * (np.pi / 4*np.log(2)) * (header['CDELT2']/header['BMAJ']) * \
-        (header['CDELT2']/header['BMIN'])
+                (header['CDELT2']/header['BMIN'])
     elif ("Wide" in band) or ("N" in band):  # Conversion from MJy/sr to Jy
         return ((inp_flux * 1000000) / (4.25 * (10 ** 10))) * ((header['CD2_2'] * 3600) ** 2)
     elif "W" in band:  # Conversion from DN to Jy  FIXME: This assumes one file
@@ -168,9 +168,8 @@ def aperture_phot_manual(image_data, aperture_data, background_center=(0, 0)):
     num_pix = 0
     for i in range(len(aperture_data)):
         for j in range(len(aperture_data[0])):
-            if aperture_data[i, j] > 0:
-                total_flux += aperture_data[i, j]
-                num_pix += 1
+            total_flux += aperture_data[i, j]
+            num_pix += 1
 
     # Subtract out background flux
     total_flux -= num_pix * background_flux_med
@@ -192,6 +191,7 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
     cur_file = fits.open(file_name)
 
     # Define some things
+    total_flux = 0
     main_x, main_y, main_major, main_minor, main_tilt = aperture_file_read(aperture_file_name, 0)
     sub_aps = []
     for i in range(1, aperture_count(aperture_file_name)):
@@ -204,21 +204,22 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
     if ("W" in band) and ("Wide" not in band):  # The rotation is weird for WISE apertures
         main_tilt = main_tilt - 90 + cur_file[0].header['CROTA2']
 
+    cur_wcs = WCS(cur_file[0].header, naxis=[1, 2])
     # Get total flux for subtraction apertures (if using multiple apertures for point subtraction)
     sub_total = 0
     for i in range(len(sub_aps)):
         sub_x, sub_y, sub_major, sub_minor, sub_tilt = sub_aps[i]
         sub_coord = SkyCoord(sub_x, sub_y, frame='icrs', unit='deg')
         sub_ap = SkyEllipticalAperture(sub_coord, sub_major*u.deg, sub_minor*u.deg, theta=sub_tilt*u.deg)
-        sub_ap = sub_ap.to_pixel(WCS(cur_file[0].header))
+        sub_ap = sub_ap.to_pixel(cur_wcs)
         sub_ap_mask = sub_ap.to_mask(method='center')
         sub_ap_mask = sub_ap_mask.multiply(data)
-        if aperture_phot_manual(data, sub_ap_mask, background_center) > 0:
+        try:
             sub_total += aperture_phot_manual(data, sub_ap_mask, background_center)
-        else:  # On the off chance the flux value is negative
-            pass
+        except:
+            print("WARNING: Integrated flux density for subtraction aperture "
+                  + str(i) + " was less than 0, and this threw an error for some reason")
 
-    cur_wcs = WCS(cur_file[0].header, naxis=[1, 2])
     # Define aperture and create masks which will be passed to aperture_phot_manual function
     coord = SkyCoord(main_center[0], main_center[1], frame='icrs', unit='deg')
     ap = SkyEllipticalAperture(coord, main_major*u.deg, main_minor*u.deg, theta=main_tilt*u.deg)
@@ -231,10 +232,10 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
     # plt.show()
 
     # Pass mask to aperture_phot_manual function to integrate flux over aperture
-    if aperture_phot_manual(data, ap_mask, background_center) > 0:
+    try:
         total_flux = aperture_phot_manual(data, ap_mask, background_center)
-    else:  # On the off chance the flux value is negative
-        total_flux = 0
+    except:
+        print("WARNING: Integrated flux density for main aperture was less than 0, and this threw an error for some reason")
     total_flux -= sub_total
 
     # If this function is to evaluate the noise in the aperture, do that instead, overwriting the previous block
