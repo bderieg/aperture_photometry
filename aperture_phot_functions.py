@@ -10,7 +10,7 @@ import spreadsheet_interface as spin
 import matplotlib.pyplot as plt
 
 # Constants
-background_width = 20
+background_width = 10
 fc_K2V_W1 = 1.0038
 fc_K2V_W2 = 1.0512
 fc_K2V_W3 = 1.0030
@@ -56,7 +56,7 @@ def list_rms(in_list):
 
 # Converts flux from integrated image values to Jy, depending on the telescope (and, thus, the input unit)
 # inp_flux: float, band: string, header: header type
-def flux_conversion(inp_flux, band, header):
+def flux_conversion(inp_flux, band, header, header2=0):
     fc = 'K2V'  # Color correction for WISE data
 
     if "ALMA" in band:  # Conversion from Jy/beam to Jy
@@ -67,6 +67,11 @@ def flux_conversion(inp_flux, band, header):
         # print(test_flux)
         return inp_flux * (np.pi / 4*np.log(2)) * (header['CDELT2']/header['BMAJ']) * \
                 (header['CDELT2']/header['BMIN'])
+    if "PACS" in band:
+        return inp_flux
+    if "SPIRE" in band:
+        return inp_flux * (np.pi / 4*np.log(2)) * (1/header2['META_2']) * \
+                (1/header2['META_3'])
     elif ("Wide" in band) or ("N" in band):  # Conversion from MJy/sr to Jy
         return ((inp_flux * 1000000) / (4.25 * (10 ** 10))) * ((header['CD2_2'] * 3600) ** 2)
     elif "W" in band:  # Conversion from DN to Jy  FIXME: This assumes one file
@@ -172,7 +177,7 @@ def aperture_phot_manual(image_data, aperture_data, background_center=(0, 0)):
             num_pix += 1
 
     # Subtract out background flux
-    total_flux -= num_pix * background_flux_med
+    # total_flux -= num_pix * background_flux_med
 
     return total_flux
 
@@ -188,6 +193,9 @@ def aperture_phot_manual(image_data, aperture_data, background_center=(0, 0)):
 # band is a string so that the flux_conversion function knows how to convert based on the telescope
 def image_aperture_phot(file_name, aperture_file_name, background_x, background_y, band):
     # Open .fits file
+    image_number = 0
+    if ("PACS" in band) or ("SPIRE" in band):  # There are a few different images included with the Herschel data
+        image_number = 1
     cur_file = fits.open(file_name)
 
     # Define some things
@@ -196,15 +204,19 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
     sub_aps = []
     for i in range(1, aperture_count(aperture_file_name)):
         sub_aps.append(aperture_file_read(aperture_file_name, i))
-    data = cur_file[0].data
+    data = cur_file[image_number].data
     if "ALMA" in band:  # The data is 'thicker' with ALMA
-        data = cur_file[0].data[0][0]
+        data = cur_file[image_number].data[0][0]
     background_center = (background_x, background_y)
     main_center = (main_x, main_y)
     if ("W" in band) and ("Wide" not in band):  # The rotation is weird for WISE apertures
-        main_tilt = main_tilt - 90 + cur_file[0].header['CROTA2']
+        main_tilt = main_tilt - 90 + cur_file[image_number].header['CROTA2']
+    if ("PACS" in band) and (cur_file[image_number].header['META_0'] == 1):  # y axis might be flipped with Herschel
+        main_tilt -= 90
+    if "ALMA" in band:  # Also rotate with ALMA for some reason
+        main_tilt -= 90
 
-    cur_wcs = WCS(cur_file[0].header, naxis=[1, 2])
+    cur_wcs = WCS(cur_file[image_number].header, naxis=[1, 2])
     # Get total flux for subtraction apertures (if using multiple apertures for point subtraction)
     sub_total = 0
     for i in range(len(sub_aps)):
@@ -228,14 +240,11 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
     ap_mask = ap_mask.multiply(data)
     # The commented code below will display ap_mask. It should be a 2D array cutout of the .fits file in the shape of
     # the aperture
-    # plt.imshow(ap_mask)
-    # plt.show()
+    plt.imshow(ap_mask)
+    plt.show()
 
     # Pass mask to aperture_phot_manual function to integrate flux over aperture
-    try:
-        total_flux = aperture_phot_manual(data, ap_mask, background_center)
-    except:
-        print("WARNING: Integrated flux density for main aperture was less than 0, and this threw an error for some reason")
+    total_flux = aperture_phot_manual(data, ap_mask, background_center)
     total_flux -= sub_total
 
     # If this function is to evaluate the noise in the aperture, do that instead, overwriting the previous block
@@ -246,11 +255,18 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
     # Close .fits file
     cur_file.close()
 
-    # Calculate error (does not yet work for Spitzer bands, so just return)
+    # For SPIRE (Herschel), also send info on beam size from other header
+    if "SPIRE" in band:
+        return flux_conversion(total_flux, band, cur_file[image_number].header, header2=cur_file[0].header), 0
+
+    # Calculate error (does not yet work for Spitzer or Herschel bands, so just return)
     try:
         error = calc_error(ap, data)
     except:
         return flux_conversion(total_flux, band, cur_file[0].header), 0
+
+    print(total_flux)
+    print(flux_conversion(total_flux, band, cur_file[0].header))
 
     # Convert units and return flux, error
     return flux_conversion(total_flux, band, cur_file[0].header), flux_conversion(error, band, cur_file[0].header)
