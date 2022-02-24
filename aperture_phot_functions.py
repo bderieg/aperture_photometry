@@ -265,9 +265,6 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
     except:
         return flux_conversion(total_flux, band, cur_file[0].header), 0
 
-    print(total_flux)
-    print(flux_conversion(total_flux, band, cur_file[0].header))
-
     # Convert units and return flux, error
     return flux_conversion(total_flux, band, cur_file[0].header), flux_conversion(error, band, cur_file[0].header)
 
