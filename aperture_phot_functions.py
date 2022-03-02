@@ -65,13 +65,12 @@ def flux_conversion(inp_flux, band, header, header2=0):
         # test_flux_Mjypersr = inp_flux * (1*u.Jy/u.beam).to(u.MJy/u.sr, equivalencies=u.beam_angular_area(omega_B))
         # test_flux = ((test_flux_Mjypersr * 1000000) / (4.25 * (10 ** 10))) * (header['CDELT2'] ** 2)
         # print(test_flux)
-        return inp_flux * (np.pi / 4*np.log(2)) * (header['CDELT2']/header['BMAJ']) * \
-                (header['CDELT2']/header['BMIN'])
+        return inp_flux * (np.pi / 4*np.log(2)) * (header['CDELT2']/header['BMAJ']) * (header['CDELT2']/header['BMIN'])
     if "PACS" in band:
         return inp_flux
-    if "SPIRE" in band:
-        return inp_flux * (np.pi / 4*np.log(2)) * (1/header2['META_2']) * \
-                (1/header2['META_3'])
+    if "SPIRE250" in band:
+        return inp_flux * (np.pi / 4*np.log(2)) * (header2['CDELT2']/(18.9/3600)) * \
+               (header2['CDELT2']/(18.0/3600))
     elif ("Wide" in band) or ("N" in band):  # Conversion from MJy/sr to Jy
         return ((inp_flux * 1000000) / (4.25 * (10 ** 10))) * ((header['CD2_2'] * 3600) ** 2)
     elif "W" in band:  # Conversion from DN to Jy  FIXME: This assumes one file
@@ -173,11 +172,12 @@ def aperture_phot_manual(image_data, aperture_data, background_center=(0, 0)):
     num_pix = 0
     for i in range(len(aperture_data)):
         for j in range(len(aperture_data[0])):
-            total_flux += aperture_data[i, j]
-            num_pix += 1
+            if aperture_data[i, j] != 0.0:
+                total_flux += aperture_data[i, j]
+                num_pix += 1
 
     # Subtract out background flux
-    # total_flux -= num_pix * background_flux_med
+    total_flux -= num_pix * background_flux_med
 
     return total_flux
 
