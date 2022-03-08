@@ -55,7 +55,7 @@ def get_parameters(t):
     return sci_name, unc_name, ap_name, background_x, background_y, background_x_2, background_y_2, band, sci_name_2, \
         unc_name_2, two_files
 
-def update_spreadsheet(start=start_index, end=end_index):
+def update_spreadsheet(start=start_index, end=end_index, curve_of_growth=False, show_image=False):
     wb = opxl.load_workbook(spreadsheet_loc)
     sheet = wb.active
 
@@ -73,7 +73,13 @@ def update_spreadsheet(start=start_index, end=end_index):
         unc_name_2 = get_parameters(i)[9]
         two_files = get_parameters(i)[10]
 
-        update_values = apf.image_aperture_phot(sci_name, ap_name, background_x, background_y, band)
+        if curve_of_growth:
+            if "ALMA" in band:
+                apf.curve_of_growth(sci_name, ap_name, background_x, background_y, band, background_sub=False)
+            else:
+                apf.curve_of_growth(sci_name, ap_name, background_x, background_y, band, background_sub=True)
+        update_values = apf.image_aperture_phot(sci_name, ap_name, background_x, background_y, band,
+                                                show_image=show_image)
 
         sheet[flux_col + str(i)] = round(update_values[0], 8)
         sheet[err_col + str(i)] = round(update_values[1], 8)
