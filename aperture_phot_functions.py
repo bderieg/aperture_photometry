@@ -226,7 +226,7 @@ def image_aperture_phot(file_name, aperture_file_name, background_x, background_
     if (("W" in band) and ("Wide" not in band)) or ("SPIRE" in band):
         main_tilt = main_tilt - 90 + cur_file[image_number].header['CROTA2']
     # y-axis might be flipped with PACS (Herschel) & ALMA
-    if (("PACS" in band) and (cur_file[image_number].header['META_0'] == 1)) or ("ALMA" in band):
+    if ("PACS" in band) or ("ALMA" in band):
         main_tilt -= 90
 
     # Scale aperture if given by ap_scaling kwarg (generally for use with a curve of growth analysis)
